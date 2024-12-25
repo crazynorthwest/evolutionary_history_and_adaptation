@@ -1,0 +1,324 @@
+
+//Creates and prints a library of mutations based on position in the genome for individuals to draw from
+//EFFECTS: Based on pre-defined simulation parameters, returns and also records in a file a constant global matrix where row number
+//(starting from 0) denotes genome position, the first column denotes the multi-dimensional trait sphere the 
+//mutation inhabits, and the rest of the columns denote trait values for all n traits. These traits are created randomly
+//using pre-defined lambda values.
+function(numeric)CreateMutationLibrary(void){
+	fileName = addPath()+"/mutation/"+filenamenumber+".dat";
+	header = "ID mutsize "+(paste(rep("traitValue",n)+1:n,sep=" "));
+	writeFile(fileName,header);
+	library = matrix(rep(0.0,genome_size*n),ncol=n);
+	for(i in 0:(genome_size-1)){
+		rx= rexp(1,lambda);
+		x = rnorm(n);
+		deltaZ = x*rx/sqrt(sum(x^2));
+		library[i,]=deltaZ;
+		writeFile(fileName,paste(c(i,rx,deltaZ),sep=" "),T);
+	}
+	return library;
+}
+
+//Gives the euclidian distance between two vectors to the power of k
+//REQUIRES: two numeric vectors of the same dimensionality, k to be a numeric value previously defined globally
+//EFFECTS: returns the euclidian distance between the two vectors to the power of k
+function (numeric)EuclideanDistanceToK(numeric a, numeric b){
+	c=a-b;
+	distance = sqrt(sum(c^2))^k;
+	return distance;
+}
+
+//returns the fitness of an individual within a given sphere 
+//z must be a vector, with element [a] being the ath trait value of a given phenotype sphere
+//o must be a vector, with element [a] being the ath optimum trait value of the same given phenotype sphere
+//REQUIRES: z and o to be numeric vectors of the same dimensionality, z representing the trait vector in a given sphere of an individual,
+//and o representing the optimum trait vector of the same sphere
+//EFFECTS: returns the fitness value of the individual in the given sphere
+function (numeric)fitnessFunction(numeric z, numeric o){
+	fitness = exp(-q*EuclideanDistanceToK(z,o));
+	return fitness;
+}
+
+//returns the fitnesses of a vector of individuals calculated using all spheres, given a matrix of
+//optimum trait values
+//REQUIRES: a vector of individuals, and a matrix of optimum values for all spheres in the simulation,
+//with entries [sphere, trait]. The individuals must have mutations with a deltaZ value of a numeric vector
+//of the same dimensionality as the sphere dimensionality
+//EFFECTS: a vector of fitnesses corresponding to the fitness values of all individuals
+function (numeric)getFitness(object<Individual> inds, numeric optimum) {
+	fitnesses = NULL;
+	phenotypes  = NULL;
+	for (ind in inds) {
+		fitness = 1.0;
+		for (mutType in sim.mutationTypes){
+			Z = rep(0,n);
+			for (mutation in ind.genome1.mutationsOfType(mutType)){
+				Z = Z + (mutation.getValue("deltaZ"))/2;
+			}
+			for (mutation in ind.genome2.mutationsOfType(mutType)){
+				Z = Z + (mutation.getValue("deltaZ"))/2;
+			}
+			for (sub in sim.substitutions[sim.substitutions.mutationType == mutType]){
+				Z = Z + sub.getValue("deltaZ");
+			}
+			fitness = fitness * fitnessFunction(Z, drop(optimum[mutType.id-1, ]));
+		}
+		fitnesses = c(fitnesses, fitness);
+		
+		for (i in 0:(n-1)){
+			ind.setValue("phenotype"+i, Z[i]);
+		}
+	
+	}
+	return fitnesses;
+}
+
+//sets the delta z of each mutation. Calls upon a pre-defined library 
+//This is a callback that is called whenever a mutation is created
+//Mutations are allowed to occur in pre-test simulations
+1: mutation() {
+	//a mutation "undoing" a previous mutation (back to phenotype of rep(0,n)) is given a F tag value, and T otherwise
+	info = mutation_library[mut.position,];
+	if(any(genome.mutations.position==mut.position)){
+		if(genome.mutations[genome.mutations.position==mut.position].tag){
+			mut.setMutationType(1);
+			mut.setValue("deltaZ",rep(0,n));
+			mut.tag=F;
+		} else {
+			mut.setMutationType(1);
+			mut.setValue("deltaZ",info);
+			mut.tag=T;
+		}
+	}else{
+		mut.setMutationType(1);
+		mut.setValue("deltaZ",info);
+		mut.tag=T;
+	}
+	return T;
+}
+
+
+//determines and assigns the fitness of all individuals in a subpopulation with a given a set of optimum vectors
+//REQUIRES: a subpopulation of individuals, and a matrix of optimum values for all spheres in the simulation,
+//with entries [sphere,trait]. The individuals must have mutations with a deltaZ value of a numeric vector
+//of the same dimensionality as the sphere dimensionality
+//MODIFIES: the individuals in the subpopulation have their fitnessScaling property assigned according to Fisher's 
+//geometric model
+function(void)assignFisherFitness(object<Subpopulation> subpop, numeric optimum){
+	subpop.individuals.fitnessScaling = getFitness(subpop.individuals, optimum);
+}
+
+//FUNCTIONS TO RUN THE SIMULATION-------------------------------------------------------------------------
+initialize() {
+	fileName_whole = addPath() + "/whole_simulation/" + filenamenumber + ".dat";
+	header = "generation population size "+paste(rep("phenotype",n)+1:n,sep=" ");
+	writeFile(fileName_whole,header,T);
+	fileName_test = addPath() + "/test_simulation/" + filenamenumber + ".dat";
+	if (!fileExists(fileName_test)){
+		header = "generation population fitness "+ (paste(rep("phenotype",n)+1:n,sep=" "));
+		writeFile(fileName_test,header);
+	}
+	if(!exists("q")){
+		defineConstant("q",1); //strength of selection
+	}
+	if(!exists("k")){
+		defineConstant("k",2.0); //degree of epistasis
+	}
+	if(!exists("N")){
+		defineConstant("N",500); //initial size of each population
+	}
+	if(!exists("mutationRate")){
+		defineConstant("mutationRate", 1e-4); //mutation rate
+	}
+	if(!exists("recombinationRate")){
+		defineConstant("recombinationRate", 0.05); //recombination rate
+	}
+	if(!exists("lambda")){
+		defineConstant("lambda", 0.1); //lambda for mutation effect size
+	}
+	if(!exists("K")){
+		defineConstant("K",2000.0); //carrying capacity
+	}
+	if(!exists("r")){
+		defineConstant("r",1.4); //intrinsic growth rate
+	}
+	if(!exists("beta")){
+		defineConstant("beta",0.1); //birth rate
+	}
+	if(!exists("genome_size")){
+		defineConstant("genome_size",200);
+	}
+	if(!exists("initialOptimal")){
+		defineConstant("initialOptimal",matrix(rep(0,n),nrow=1));
+	}
+	if(!exists("middleOptimal1")){
+		defineConstant("middleOptimal1",matrix(c(0.5,0.5,rep(0,n-2)),nrow=1));
+	}
+	if(!exists("middleOptimal2")){
+		defineConstant("middleOptimal2",matrix(c(0.5,-0.5,rep(0,n-2)),nrow=1));
+	}
+	if(!exists("finalOptimal")){
+		defineConstant("finalOptimal",matrix(c(1,rep(0,n-1)),nrow=1));
+	}
+	
+	//initial phenotypes for both populations assumed to be the origin
+	//initialize other simulation parameters
+	initializeMutationRate(mutationRate);
+	initializeMutationType("m1",0.5,"f",0.0);
+	mutationTypes = m1;
+	m1.convertToSubstitution=F;
+	m1.mutationStackPolicy="l";
+	initializeGenomicElementType("g1",m1,1.0);
+	initializeGenomicElement(g1,0,genome_size-1);
+	initializeRecombinationRate(recombinationRate);
+	defineConstant("mutation_library", CreateMutationLibrary());
+}
+
+1 early() {
+	sim.addSubpop("p1", N);
+	sim.addSubpop("p2", N);
+	p1.setValue("fitnesses",NULL);
+	p2.setValue("fitnesses",NULL);
+	for(pop in sim.subpopulations){
+		average_phenotype = NULL;
+		fileName_whole = addPath() + "/whole_simulation/" + filenamenumber + ".dat";
+		population_size_data = paste("1", pop, N, rep(0,n), sep = " ");
+		writeFile(fileName_whole, population_size_data, T);
+	}
+}
+1:200 late(){
+	for(pop in sim.subpopulations){
+		//assign fisher fitness
+		assignFisherFitness(pop,initialOptimal);
+		freqs=sim.mutationFrequencies(pop);
+		// calculating the number of individuals in next generation if not extinct
+		fitness_mean = mean(pop.individuals.fitnessScaling);
+		newSize = asInteger(pop.individualCount + pop.individualCount * r * (1 - pop.individualCount / K) - (1 - fitness_mean)* pop.individualCount + rnorm(1) * sqrt(pop.individualCount * r * (1 - pop.individualCount / K) + (1 - fitness_mean+ 2*beta) * pop.individualCount));
+		
+		if(newSize<=0){
+			pop.setSubpopulationSize(0);
+			sim.simulationFinished();
+		}
+		else{
+			pop.setSubpopulationSize(newSize);
+		}
+		average_phenotype = NULL;
+		for (i in 0:(n-1)){
+			phenotype_record = NULL;
+			for (ind in pop.individuals){
+				phenotype_record = c(phenotype_record,ind.getValue("phenotype"+i));
+			}
+			average_phenotype = c(average_phenotype, mean(phenotype_record));
+		}
+		fileName_whole = addPath() + "/whole_simulation/" + filenamenumber + ".dat";
+		population_size_data = paste(sim.cycle+1, pop, newSize, average_phenotype, sep = " ");
+		writeFile(fileName_whole,population_size_data,T);
+	}
+}
+
+201:800 late(){
+	assignFisherFitness(p1,middleOptimal1);
+	assignFisherFitness(p2,middleOptimal2);
+	for(pop in sim.subpopulations){
+		//assign fisher fitness
+		//		assignFisherFitness(pop,pop.optimum);
+		freqs=sim.mutationFrequencies(pop);
+		// calculating the number of individuals in next generation if not extinct
+		fitness_mean = mean(pop.individuals.fitnessScaling);
+		newSize = asInteger(pop.individualCount + pop.individualCount * r * (1 - pop.individualCount / K) - (1 - fitness_mean)* pop.individualCount + rnorm(1) * sqrt(pop.individualCount * r * (1 - pop.individualCount / K) + (1 - fitness_mean+ 2*beta) * pop.individualCount));
+		
+		if(newSize<=0){
+			pop.setSubpopulationSize(0);
+			sim.simulationFinished();
+		}
+		else{
+			pop.setSubpopulationSize(newSize);
+		}
+		average_phenotype = NULL;
+		for (i in 0:(n-1)){
+			phenotype_record = NULL;
+			for (ind in pop.individuals){
+				phenotype_record = c(phenotype_record,ind.getValue("phenotype"+i));
+			}
+			average_phenotype = c(average_phenotype, mean(phenotype_record));
+		}
+		fileName_whole = addPath() + "/whole_simulation/" + filenamenumber + ".dat";
+		population_size_data = paste(sim.cycle+1, pop, newSize, average_phenotype, sep = " ");
+		writeFile(fileName_whole,population_size_data,T);
+	}
+}
+
+// output samples of 10 genomes periodically, all fixed mutations at end
+801:1399 late(){
+	for(pop in sim.subpopulations){
+		//assign fisher fitness
+		assignFisherFitness(pop,finalOptimal);
+		freqs=sim.mutationFrequencies(pop);
+		// calculating the number of individuals in next generation if not extinct
+		fitness_mean = mean(pop.individuals.fitnessScaling);
+		newSize = asInteger(pop.individualCount + pop.individualCount * r * (1 - pop.individualCount / K) - (1 - fitness_mean)* pop.individualCount + rnorm(1) * sqrt(pop.individualCount * r * (1 - pop.individualCount / K) + (1 - fitness_mean+ 2*beta) * pop.individualCount));
+		
+		if(newSize<=0){
+			pop.setSubpopulationSize(0);
+			sim.simulationFinished();
+		}
+		else{
+			pop.setSubpopulationSize(newSize);
+		}
+		average_phenotype = NULL;
+		for (i in 0:(n-1)){
+			phenotype_record = NULL;
+			for (ind in pop.individuals){
+				phenotype_record = c(phenotype_record, ind.getValue("phenotype"+i));
+			}
+			average_phenotype = c(average_phenotype, mean(phenotype_record));
+		}
+		fileName_whole = addPath() + "/whole_simulation/" + filenamenumber + ".dat";
+		population_size_data = paste(sim.cycle+1, pop, newSize, average_phenotype, sep = " ");
+		writeFile(fileName_whole,population_size_data,T);
+	}
+}
+1400: late() {
+	for(pop in sim.subpopulations){
+		//assign fisher fitness	
+		assignFisherFitness(pop,testOptimal);
+		freqs=sim.mutationFrequencies(pop);
+		// calculating the number of individuals in next generation if not extinct
+		fitness_mean = mean(pop.individuals.fitnessScaling);
+		newSize = asInteger(pop.individualCount + pop.individualCount * r * (1 - pop.individualCount / K) - (1 - fitness_mean)* pop.individualCount + rnorm(1) * sqrt(pop.individualCount * r * (1 - pop.individualCount / K) + (1 - fitness_mean+ 2*beta) * pop.individualCount));
+		
+		if(newSize<=0){
+			pop.setSubpopulationSize(0);
+			sim.simulationFinished();
+		}
+		else{
+			pop.setSubpopulationSize(newSize);
+		}
+		average_phenotype = NULL;
+		for (i in 0:(n-1)){
+			phenotype_record = NULL;
+			for (ind in pop.individuals){
+				phenotype_record = c(phenotype_record, ind.getValue("phenotype"+i));
+			}
+			average_phenotype = c(average_phenotype, mean(phenotype_record));
+		}
+		fileName_whole = addPath() + "/whole_simulation/" + filenamenumber + ".dat";
+		population_size_data = paste(sim.cycle+1, pop, newSize, average_phenotype, sep = " ");
+		writeFile(fileName_whole,population_size_data,T);
+	}
+}
+1400: late(){
+	fileName_test = addPath() + "/test_simulation/" + filenamenumber + ".dat";
+	for (pop in sim.subpopulations){
+		for (ind in pop.individuals){
+			phenotyperecord = paste(sim.cycle+1, pop, ind.fitnessScaling, sep=" ");
+			for (i in 0:(n-1)){
+				phenotyperecord = paste(phenotyperecord,ind.getValue("phenotype"+i),sep=" ");
+			}
+			writeFile(fileName_test,phenotyperecord,T);
+		}
+	}
+}
+1501 late(){
+	sim.simulationFinished();
+}
